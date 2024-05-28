@@ -7,3 +7,5 @@ SRTM Dataset Selection: Choose from various Digital Elevation Model (DEM) datase
 Elevation Threshold: Define a critical elevation level to visualize areas vulnerable to flooding due to rising sea levels.
 Interactive Land Area Opacity: Adjust the transparency of the landmass to enhance visualization clarity.
 Real-time Land Loss Calculations: Observe the calculated area and percentage of land loss based on your chosen threshold.
+
+Link: https://ee-sgcoasts001.projects.earthengine.app/view/sg-slr
