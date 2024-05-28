@@ -1,0 +1,188 @@
+// Model
+var sg = {};
+
+sg.countries = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017');
+sg.singapore = sg.countries.filter(ee.Filter.eq('country_na', 'Singapore')).geometry();
+
+// Define the SRTM datasets
+var datasets = {
+  '1': ee.Image("CGIAR/SRTM90_V4"), // SRTM Digital Elevation Data Version 4
+  '2': ee.Image("NASA/NASADEM_HGT/001"), // NASADEM: NASA NASADEM Digital Elevation 30m (Reprocessed)
+  '3': ee.Image("USGS/SRTMGL1_003") // NASA SRTM Digital Elevation 30m
+};
+
+// Function to clip the selected dataset to Singapore
+function clipDataset(datasetKey) {
+  return datasets[datasetKey].clip(sg.singapore).select([0]);
+}
+
+// Center the map on Singapore with a zoom level of 11
+Map.setCenter(103.8198, 1.3521, 11);
+
+// UI
+
+// Title
+var title = {};
+
+// Create a title label and add it to the 'title' object
+title.label = ui.Label('Visualising Singapore\'s Sea Level Rise', {
+  fontWeight: 'bold',
+  fontSize: '20px',
+  margin: '10px 5px'
+});
+
+// Create a panel to hold the title label
+title.panel = ui.Panel({
+  widgets: [title.label],
+  style: {padding: '8px', backgroundColor: 'white'}
+});
+
+// Selector
+var selector = {};
+
+// Create a dropdown to select an SRTM dataset and add it to the 'selector' object
+selector.dropdown = ui.Select({
+  items: [
+    {label: 'SRTM Digital Elevation Data Version 4', value: '1'},
+    {label: 'NASADEM: NASA NASADEM Digital Elevation 30m (Reprocessed)', value: '2'},
+    {label: 'NASA SRTM Digital Elevation 30m', value: '3'}
+  ],
+  placeholder: 'Select an SRTM dataset',
+  value: '1', // Default value to avoid undefined errors
+  onChange: updateMap
+});
+
+// Create a panel to hold the selector and add it to the 'selector' object
+selector.panel = ui.Panel({
+  widgets: [ui.Label('Select an SRTM dataset'), selector.dropdown],
+  style: {padding: '8px', backgroundColor: 'white'}
+});
+
+// Text box for elevation threshold
+var thresholdInput = {};
+
+// Create a text box to enter the elevation threshold
+thresholdInput.textBox = ui.Textbox({
+  value: '5', // Default value
+  onChange: updateMap,
+  style: {width: '200px'}
+});
+
+thresholdInput.label = ui.Label('Elevation Threshold (m)');
+
+thresholdInput.panel = ui.Panel({
+  widgets: [thresholdInput.label, thresholdInput.textBox],
+  style: {padding: '8px', backgroundColor: 'white'}
+});
+
+// Slider for fill opacity
+var opacityInput = {};
+
+opacityInput.slider = ui.Slider({
+  min: 0,
+  max: 1,
+  value: 0.5, // Default value
+  step: 0.1,
+  onChange: updateMap,
+  style: {width: '200px'}
+});
+
+opacityInput.label = ui.Label('Fill Opacity');
+
+opacityInput.panel = ui.Panel({
+  widgets: [opacityInput.label, opacityInput.slider],
+  style: {padding: '8px', backgroundColor: 'white'}
+});
+
+// Output labels
+var output = {};
+
+output.areaLabel = ui.Label('Area of Land Loss: ');
+output.percentLabel = ui.Label('Percentage of Land Mass Loss: ');
+
+output.panel = ui.Panel({
+  widgets: [output.areaLabel, output.percentLabel],
+  style: {padding: '8px', backgroundColor: 'white'}
+});
+
+// Create a main panel to hold the title, selector, threshold, opacity, and output panels
+var mainPanel = ui.Panel({
+  widgets: [title.panel, selector.panel, thresholdInput.panel, opacityInput.panel, output.panel],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {position: 'top-left', padding: '8px'}
+});
+
+// Add the main panel to the map
+ui.root.add(mainPanel);
+
+// Function to update the map based on the selected SRTM dataset, elevation threshold, and opacity
+function updateMap() {
+  var selectedValue = selector.dropdown.getValue();
+  if (!selectedValue) {
+    return;
+  }
+
+  var selectedImage = datasets[selectedValue];
+  if (!selectedImage) {
+    return;
+  }
+
+  var threshold = parseFloat(thresholdInput.textBox.getValue());
+  if (isNaN(threshold)) {
+    threshold = 0; // Default to 0 if the input is not a valid number
+  }
+
+  var fillOpacity = opacityInput.slider.getValue();
+
+  // Clip the elevation data to Singapore's boundary and select the first band
+  var srtmClipBand = clipDataset(selectedValue);
+
+  // Create a mask for elevations less than or equal to the threshold
+  var lowElevation = srtmClipBand.lte(threshold);
+
+  // Add layers in the correct order
+  Map.layers().reset();
+
+  // Add a layer to fill Singapore with black color and set opacity
+  Map.addLayer(ee.Image().paint(sg.singapore, 0), {palette: '000000', opacity: fillOpacity}, 'Singapore Fill');
+
+  // Add a layer to visualize Singapore's border with an outline
+  Map.addLayer(ee.Image().paint(sg.singapore, 1, 2), {palette: '000000', opacity: 1.0}, 'Singapore Border');
+
+  // Add a layer to visualize the areas with elevation <= threshold in red
+  if (threshold > 0) {
+    Map.addLayer(lowElevation.selfMask(), {palette: ['red'], opacity: 0.7}, 'Areas <= ' + threshold + 'm');
+  }
+
+  // Calculate the area of low elevation land (<= threshold)
+  var pixelArea = ee.Image.pixelArea();
+  var lowElevationArea = pixelArea.updateMask(lowElevation).reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: sg.singapore,
+    scale: 30,
+    maxPixels: 1e9
+  }).get('area');
+
+  // Calculate the total area of Singapore
+  var totalArea = pixelArea.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: sg.singapore,
+    scale: 30,
+    maxPixels: 1e9
+  }).get('area');
+
+  // Evaluate the calculated areas and update the output labels
+  ee.Number(lowElevationArea).evaluate(function(area) {
+    ee.Number(totalArea).evaluate(function(total) {
+      var areaKm2 = area / 1e6;
+      var percentLoss = (area / total) * 100;
+      output.areaLabel.setValue('Area of Land Loss: ' + areaKm2.toFixed(2) + ' km²');
+      output.percentLabel.setValue('Percentage of Land Mass Loss: ' + percentLoss.toFixed(2) + '%');
+      output.areaLabel.style().set('fontWeight', 'bold');
+      output.percentLabel.style().set('fontWeight', 'bold');
+    });
+  });
+}
+
+// Initial map update
+updateMap();
